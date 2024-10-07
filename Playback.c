@@ -1,10 +1,12 @@
+// Include C:\ti\pdk_omapl138_1_0_11\packages\ in include options
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
-#include <ti/drv/mcasp/McASP.h>
-#include <ti/drv/edma3/EDMA3.h>
+#include <ti/drv/mcasp/mcasp_cfg.h>
+#include <ti/csl/csl_edma3.h>
 #include <ti/drv/i2c/I2C.h>
-#include "fatfs/ff.h" // Include FatFS for file operations
+#include "fatfs/ff.h"
+
 
 #define AUDIO_BUFFER_SIZE 1024
 #define NUM_BUFFERS 2
@@ -39,6 +41,8 @@ int main() {
 
     // Initialize audio interfaces
     initAudio();
+
+    configureCodec();
 
     // Setup EDMA for audio transfer
     setupEDMA();
@@ -132,25 +136,60 @@ void configureCodec() {
 }
 
 void setupEDMA() {
-    // Initialize EDMA
-    EDMA3_Params edmaParams;
-    EDMA3_Params_init(&edmaParams);
-    hEdmaTx = EDMA3_open(0, &edmaParams);
+    CSL_Status status;
+    CSL_Edma3ChannelObj *edmaObj;
+    CSL_Edma3ParamHandle paramHandle;
+    CSL_Edma3ParamSetup paramSetup;
 
-    // Configure EDMA parameters
-    EDMA3_ChannelHandle hChannel = EDMA3_allocChannel(hEdmaTx, EDMA3_CHANNEL_0);
-    
-    // Set up the transfer attributes (source, destination, etc.)
-    EDMA3_setParam(hChannel, audioBuffers[currentBuffer], (void *)&hMcasp->xbuf, AUDIO_BUFFER_SIZE, sizeof(int16_t), 1, 0);
-    
-    // Enable the DMA transfer
-    EDMA3_start(hChannel);
-    
-    // Set up interrupt for TX complete
+    // Open EDMA module
+    hEdmaTx = CSL_edma3Open(&edmaObj, CSL_EDMA3, NULL, &status);
+    if (hEdmaTx == NULL || status != CSL_SOK) {
+        printf("Failed to open EDMA: status = %d\n", status);
+        return;
+    }
+
+    // Get the EDMA parameter handle for the McASP transmit channel
+    // Note: Verify that 14 is the correct channel for McASP TX on your board
+    paramHandle = CSL_edma3GetParamHandle(hEdmaTx, 14, &status);
+    if (paramHandle == NULL || status != CSL_SOK) {
+        printf("Failed to get EDMA param handle: status = %d\n", status);
+        return;
+    }
+
+    // Configure the EDMA parameters for buffer transfer
+    paramSetup.option = CSL_EDMA3_OPT_MAKE(CSL_EDMA3_ITCCH_DIS, CSL_EDMA3_TCCH_DIS,
+        CSL_EDMA3_ITCINT_DIS, CSL_EDMA3_TCINT_EN, 14, CSL_EDMA3_TCC_NORMAL,
+        CSL_EDMA3_FIFOWIDTH_NONE, CSL_EDMA3_STATIC_DIS, CSL_EDMA3_SYNC_AB,
+        CSL_EDMA3_ADDRMODE_INCR, CSL_EDMA3_ADDRMODE_CONST);
+
+    paramSetup.srcAddr = (Uint32)audioBuffers[currentBuffer];
+    paramSetup.dstAddr = (Uint32)&hMcasp->xbuf;
+    paramSetup.aCnt = sizeof(int16_t);
+    paramSetup.bCnt = AUDIO_BUFFER_SIZE;
+    paramSetup.cCnt = 1;
+    paramSetup.srcBIdx = sizeof(int16_t);
+    paramSetup.dstBIdx = 0;
+    paramSetup.srcCIdx = 0;
+    paramSetup.dstCIdx = 0;
+    paramSetup.linkAddr = CSL_EDMA3_LINK_NULL;
+
+    status = CSL_edma3ParamSetup(paramHandle, &paramSetup);
+    if (status != CSL_SOK) {
+        printf("Failed to set up EDMA parameters: status = %d\n", status);
+        return;
+    }
+
+    // Enable the EDMA channel for McASP TX
+    status = CSL_edma3HwChannelControl(hEdmaTx, CSL_EDMA3_CMD_CHANNEL_ENABLE, NULL);
+    if (status != CSL_SOK) {
+        printf("Failed to enable EDMA channel: status = %d\n", status);
+        return;
+    }
+
+    // Set up interrupt for transfer complete
     IRQ_plug(CSL_INTC_EVENTID_EDMA3_0_CC0_INT1, &dmaIsr);
     IRQ_enable(CSL_INTC_EVENTID_EDMA3_0_CC0_INT1);
 }
-
 void startPlayback() {
     // Enable McASP
     McASP_start(hMcasp);
