@@ -1,11 +1,10 @@
 #include <stdio.h>
 #include <string.h>
-#include <c6x.h>
-#include <csl.h>
-#include <csl_mcbsp.h>
-#include <csl_edma3.h>
-#include <csl_intc.h>
-#include "fatfs/ff.h"     // FAT file system module
+#include <stdint.h>
+#include <ti/drv/mcasp/McASP.h>
+#include <ti/drv/edma3/EDMA3.h>
+#include <ti/drv/i2c/I2C.h>
+#include "fatfs/ff.h" // Include FatFS for file operations
 
 #define AUDIO_BUFFER_SIZE 1024
 #define NUM_BUFFERS 2
@@ -14,19 +13,19 @@
 int16_t audioBuffers[NUM_BUFFERS][AUDIO_BUFFER_SIZE];
 int currentBuffer = 0;
 
-// FAT file system objects
+// FatFS objects
 FATFS fatfs;
 FIL file;
 
-// McBSP handle
-CSL_McbspHandle hMcbsp;
+// McASP handle
+McASP_Handle hMcasp;
 
 // EDMA handle
-CSL_Edma3ChannelHandle hEdmaTx;
+EDMA3_Handle hEdmaTx;
 
 // Function prototypes
 void initAudio();
-void setupDMA();
+void setupEDMA();
 void configureCodec();
 void startPlayback();
 interrupt void dmaIsr();
@@ -41,8 +40,8 @@ int main() {
     // Initialize audio interfaces
     initAudio();
 
-    // Setup DMA for audio transfer
-    setupDMA();
+    // Setup EDMA for audio transfer
+    setupEDMA();
 
     // Mount the SD card
     fr = f_mount(&fatfs, "", 1);
@@ -85,32 +84,23 @@ int main() {
 }
 
 void initAudio() {
-    // Initialize McBSP (Multi-Channel Buffered Serial Port)
-    CSL_McbspObj mcbspObj;
-    hMcbsp = CSL_mcbspOpen(&mcbspObj, CSL_MCBSP_0, NULL, NULL);
+    // Initialize McASP
+    McASP_Params mcaspParams;
+    McASP_Params_init(&mcaspParams);
+    mcaspParams.frameSyncMode = McASP_FRAME_SYNC_MODE;
+    mcaspParams.dataFormat = McASP_DATA_FORMAT_I2S; // Set to I2S format
+    mcaspParams.wordLength = McASP_WORD_LENGTH_16;  // Set 16-bit word length
+    hMcasp = McASP_open(MCASP_INSTANCE, &mcaspParams);
 
-    // Configure McBSP (adjust these settings based on your audio format)
-    CSL_McbspConfig config;
-    CSL_mcbspGetHwSetup(hMcbsp, &config);
-    config.srgr1 = 0x00000100; // CLKGDV = 1, FWID = 0
-    config.srgr2 = 0x00003F03; // GSYNC = 0, CLKSP = 0, CLKSM = 1, FPER = 0x3F
-    config.pcr = 0x00000A00;   // CLKRM = 1, CLKXM = 1
-    config.rcr1 = 0x00010000;  // RWDLEN1 = 1 (16-bit)
-    config.xcr1 = 0x00010000;  // XWDLEN1 = 1 (16-bit)
-    CSL_mcbspHwSetup(hMcbsp, &config);
+    // Configure additional McASP settings as needed
+    // You can configure the clock and frame sync settings here
 }
 
 void configureCodec() {
     // Initialize I2C for codec control
-    CSL_I2cObj i2cObj;
-    hI2c = CSL_i2cOpen(&i2cObj, CSL_I2C_0, NULL, NULL);
-
-    // Configure I2C for communication with codec
-    CSL_I2cConfig i2cConfig;
-    CSL_i2cGetHwSetup(hI2c, &i2cConfig);
-    i2cConfig.mode = CSL_I2C_MODE_MASTER;
-    i2cConfig.bitRate = CSL_I2C_BITRATE_100K;
-    CSL_i2cHwSetup(hI2c, &i2cConfig);
+    I2C_Params i2cParams;
+    I2C_Params_init(&i2cParams);
+    I2C_Handle hI2c = I2C_open(0, &i2cParams);
 
     // Configure TLV320AIC3106 codec (example configuration, adjust as needed)
     uint8_t codecRegs[][2] = {
@@ -132,73 +122,48 @@ void configureCodec() {
     };
 
     // Send configuration to codec
-    for (int i = 0; i < sizeof(codecRegs)/sizeof(codecRegs[0]); i++) {
-        CSL_i2cWrite(hI2c, 0x18, codecRegs[i], 2, CSL_I2C_START_STOP);
+    for (int i = 0; i < sizeof(codecRegs) / sizeof(codecRegs[0]); i++) {
+        I2C_Transaction i2cTransaction;
+        i2cTransaction.slaveAddress = 0x18; // Codec I2C address
+        i2cTransaction.writeBuf = codecRegs[i];
+        i2cTransaction.writeCount = 2;
+        I2C_transfer(hI2c, &i2cTransaction);
     }
 }
 
-void setupDMA() {
+void setupEDMA() {
     // Initialize EDMA
-    CSL_edma3Init(NULL);
-
-    // Open EDMA channel for TX
-    hEdmaTx = CSL_edma3ChannelOpen(NULL, CSL_EDMA3_CHA_MCBSP0_TX, NULL, NULL);
+    EDMA3_Params edmaParams;
+    EDMA3_Params_init(&edmaParams);
+    hEdmaTx = EDMA3_open(0, &edmaParams);
 
     // Configure EDMA parameters
-    CSL_Edma3ParamSetup txParams;
-
-    // TX parameters
-    txParams.option = CSL_EDMA3_OPT_MAKE(CSL_EDMA3_ITCCH_EN, \
-                                         CSL_EDMA3_TCCH_DIS, \
-                                         CSL_EDMA3_ITCINT_EN, \
-                                         CSL_EDMA3_TCINT_DIS, \
-                                         CSL_EDMA3_TCC_NORMAL,\
-                                         CSL_EDMA3_FIFOWIDTH_NONE, \
-                                         CSL_EDMA3_STATIC_DIS, \
-                                         CSL_EDMA3_SYNC_AB, \
-                                         CSL_EDMA3_ADDRMODE_INCR, \
-                                         CSL_EDMA3_ADDRMODE_CONST);
-    txParams.srcAddr = (uint32_t)audioBuffers[currentBuffer];
-    txParams.dstAddr = (uint32_t)&hMcbsp->xbuf;
-    txParams.aCnt = sizeof(int16_t);
-    txParams.bCnt = AUDIO_BUFFER_SIZE;
-    txParams.cCnt = 1;
-    txParams.srcBidx = sizeof(int16_t);
-    txParams.dstBidx = 0;
-    txParams.srcCidx = 0;
-    txParams.dstCidx = 0;
-    txParams.linkAddr = CSL_EDMA3_LINK_NULL;
-
-    // Set up EDMA channel
-    CSL_edma3ParamSetup(hEdmaTx, &txParams);
-
+    EDMA3_ChannelHandle hChannel = EDMA3_allocChannel(hEdmaTx, EDMA3_CHANNEL_0);
+    
+    // Set up the transfer attributes (source, destination, etc.)
+    EDMA3_setParam(hChannel, audioBuffers[currentBuffer], (void *)&hMcasp->xbuf, AUDIO_BUFFER_SIZE, sizeof(int16_t), 1, 0);
+    
+    // Enable the DMA transfer
+    EDMA3_start(hChannel);
+    
     // Set up interrupt for TX complete
     IRQ_plug(CSL_INTC_EVENTID_EDMA3_0_CC0_INT1, &dmaIsr);
     IRQ_enable(CSL_INTC_EVENTID_EDMA3_0_CC0_INT1);
 }
 
 void startPlayback() {
-    // Enable EDMA channel
-    CSL_edma3ChannelEnable(hEdmaTx);
-
-    // Start McBSP
-    CSL_mcbspEnable(hMcbsp, CSL_MCBSP_BOTH_ENABLE);
+    // Enable McASP
+    McASP_start(hMcasp);
 }
 
 interrupt void dmaIsr() {
     UINT br;
 
     // Clear EDMA interrupt
-    CSL_edma3ClearInterrupt(hEdmaTx);
+    EDMA3_clearInterrupt(hEdmaTx);
 
     // Switch to the other buffer
     currentBuffer = 1 - currentBuffer;
-
-    // Update EDMA source address to the new buffer
-    CSL_edma3ParamSetup(hEdmaTx, &((CSL_Edma3ParamSetup){
-        .srcAddr = (uint32_t)audioBuffers[currentBuffer],
-        // ... (other parameters remain the same)
-    }));
 
     // Read next chunk of audio data into the buffer we just finished playing
     f_read(&file, audioBuffers[1 - currentBuffer], sizeof(audioBuffers[0]), &br);
@@ -210,5 +175,5 @@ interrupt void dmaIsr() {
     }
 
     // Restart EDMA transfer
-    CSL_edma3ChannelEnable(hEdmaTx);
+    EDMA3_start(hEdmaTx);
 }
