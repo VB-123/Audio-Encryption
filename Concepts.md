@@ -6,4 +6,5 @@
 
 # Understanding NumtoWav.c and WavtoNum.c
 - Converting an array of numbers to a wav file and back
+- Note: The code assumes that the input .wav file is PCM encoded with 16-bit samples.
 - For reference used, [click here](https://docs.fileformat.com/audio/wav/)
