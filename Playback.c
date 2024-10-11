@@ -50,6 +50,6 @@ void audio_loopback(const char *input_filename, const char *output_filename) {
 }
 
 int main(){
-    printf("Hello world");
+    //printf("Hello world");
+    audio_loopback("input.wav", "output.wav");
 }
-
