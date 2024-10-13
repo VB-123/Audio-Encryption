@@ -20,7 +20,44 @@ typedef struct {
     uint32_t subchunk2Size;
 } WavHeader;
 
-void Wav_To_Num(const char *filename, int16_t **samples, size_t *num_samples) {
+void scale_audio(int16_t *samples, unsigned int num_samples, float scaling_factor) {
+    int16_t i;
+    for (i = 0; i < num_samples; i++) {
+        samples[i] = (int16_t)(samples[i] * scaling_factor);
+    }
+}
+
+// Reverse the audio samples
+void reverse_audio(int16_t *samples, unsigned int num_samples) {
+    unsigned int start = 0;
+    unsigned int end = num_samples - 1;
+
+    while (start < end) {
+        int16_t temp = samples[start];
+        samples[start] = samples[end];
+        samples[end] = temp;
+        start++;
+        end--;
+    }
+}
+
+// Swap chunks of audio samples
+void swap_chunks(int16_t *samples, unsigned int num_samples) {
+    int32_t chunk_size = num_samples / 4;
+    int32_t i;
+    for (i = 0; i < chunk_size; i++) {
+        // Swap the first and last chunks
+        int16_t temp = samples[i];
+        samples[i] = samples[num_samples - chunk_size + i];
+        samples[num_samples - chunk_size + i] = temp;
+
+        // Swap the second and third chunks
+        temp = samples[chunk_size + i];
+        samples[chunk_size + i] = samples[2 * chunk_size + i];
+        samples[2 * chunk_size + i] = temp;
+    }
+}
+void Wav_To_Num(const char *filename, int16_t **samples, unsigned int *num_samples) {
     FIL file;
     FRESULT res;
     UINT br;
@@ -65,7 +102,7 @@ void Wav_To_Num(const char *filename, int16_t **samples, size_t *num_samples) {
     f_close(&file);
 }
 
-void Num_to_wav(const char *filename, int16_t *samples, size_t num_samples) {
+void Num_to_wav(const char *filename, int16_t *samples, unsigned int num_samples) {
     FIL file;
     FRESULT res;
     UINT bw;
