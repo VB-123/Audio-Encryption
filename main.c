@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <ti/fs/fatfs/ff.h>
 #include "audio_utils.h"
 
@@ -50,8 +51,44 @@ void audio_loopback(const char *input_filename, const char *output_filename) {
     printf("Loopback complete.\n");
 }
 
-int main(){
-    printf("Hello world"); // :)
-    audio_loopback("input.wav", "output.wav");
+int16_t* copy_samples(const int16_t *samples, unsigned int num_samples) {
+    int16_t *copy = (int16_t *)malloc(num_samples * sizeof(int16_t));
+    if (!copy) {
+        printf("Memory allocation error.\n");
+        return NULL;
+    }
+    memcpy(copy, samples, num_samples * sizeof(int16_t));
+    return copy;
 }
 
+
+int main(){
+    printf("Hello world"); // :)
+    int16_t *samples = NULL;
+    unsigned int num_samples = 0;
+    audio_loopback("input.wav", "output.wav");
+    Num_to_wav("output_original.wav", samples, num_samples);
+    int16_t *scaled_samples = copy_samples(samples, num_samples);
+    if (scaled_samples) {
+        scale_audio(scaled_samples, num_samples, 2.0);
+        Num_to_wav("output_scaled.wav", scaled_samples, num_samples);
+        free(scaled_samples);
+    }
+
+    int16_t *reversed_samples = copy_samples(samples, num_samples);
+    if (reversed_samples) {
+        reverse_audio(reversed_samples, num_samples);
+        Num_to_wav("output_reversed.wav", reversed_samples, num_samples);
+        free(reversed_samples);
+   }
+
+   int16_t *swapped_samples = copy_samples(samples, num_samples);
+   if (swapped_samples) {
+        swap_chunks(swapped_samples, num_samples);
+        Num_to_wav("output_swapped.wav", swapped_samples, num_samples);
+        free(swapped_samples);
+    }
+
+    free(samples);
+    return 0;
+}
