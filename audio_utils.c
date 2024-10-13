@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <ti/fs/fatfs/ff.h>
 
 typedef struct {
     char chunkID[4];
@@ -20,18 +21,27 @@ typedef struct {
 } WavHeader;
 
 void Wav_To_Num(const char *filename, int16_t **samples, size_t *num_samples) {
-    FILE *file = fopen(filename, "rb");
-    if (!file) {
+    FIL file;
+    FRESULT res;
+    UINT br;
+
+    res = f_open(&file, filename, FA_READ);
+    if (res != FR_OK) {
         printf("Error opening file.\n");
         return;
     }
 
     WavHeader header;
-    fread(&header, sizeof(WavHeader), 1, file);
+    res = f_read(&file, &header, sizeof(WavHeader), &br);
+    if (res != FR_OK || br != sizeof(WavHeader)) {
+        printf("Error reading file.\n");
+        f_close(&file);
+        return;
+    }
 
     if (strncmp(header.chunkID, "RIFF", 4) != 0 || strncmp(header.format, "WAVE", 4) != 0) {
         printf("Not a valid WAV file.\n");
-        fclose(file);
+        f_close(&file);
         return;
     }
 
@@ -40,17 +50,28 @@ void Wav_To_Num(const char *filename, int16_t **samples, size_t *num_samples) {
     *samples = (int16_t *)malloc(*num_samples * sizeof(int16_t));
     if (!(*samples)) {
         printf("Memory allocation error.\n");
-        fclose(file);
+        f_close(&file);
         return;
     }
 
-    fread(*samples, sizeof(int16_t), *num_samples, file);
-    fclose(file);
+    res = f_read(&file, *samples, *num_samples * sizeof(int16_t), &br);
+    if (res != FR_OK || br != (*num_samples * sizeof(int16_t))) {
+        printf("Error reading samples.\n");
+        free(*samples);
+        f_close(&file);
+        return;
+    }
+
+    f_close(&file);
 }
 
 void Num_to_wav(const char *filename, int16_t *samples, size_t num_samples) {
-    FILE *file = fopen(filename, "wb");
-    if (!file) {
+    FIL file;
+    FRESULT res;
+    UINT bw;
+
+    res = f_open(&file, filename, FA_WRITE | FA_CREATE_ALWAYS);
+    if (res != FR_OK) {
         printf("Error opening file for writing.\n");
         return;
     }
@@ -70,7 +91,19 @@ void Num_to_wav(const char *filename, int16_t *samples, size_t num_samples) {
     memcpy(header.subchunk2ID, "data", 4);
     header.subchunk2Size = num_samples * (16 / 8);
 
-    fwrite(&header, sizeof(WavHeader), 1, file);
-    fwrite(samples, sizeof(int16_t), num_samples, file);
-    fclose(file);
+    res = f_write(&file, &header, sizeof(WavHeader), &bw);
+    if (res != FR_OK || bw != sizeof(WavHeader)) {
+        printf("Error writing header.\n");
+        f_close(&file);
+        return;
+    }
+
+    res = f_write(&file, samples, num_samples * sizeof(int16_t), &bw);
+    if (res != FR_OK || bw != (num_samples * sizeof(int16_t))) {
+        printf("Error writing samples.\n");
+        f_close(&file);
+        return;
+    }
+
+    f_close(&file);
 }
