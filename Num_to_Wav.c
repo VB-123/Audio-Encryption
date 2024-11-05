@@ -75,6 +75,6 @@ void convert_raw_to_wav(const char *raw_filename, const char *wav_filename,
 }
 
 int main() {
-    convert_raw_to_wav("denoise.raw", "output.wav", 44100, 1, 16); // Example parameters
+    convert_raw_to_wav("denoise.raw", "output.wav", 44100, 1, 16); // Parameters to be changed as per the audio file being used
     return 0;
 }
